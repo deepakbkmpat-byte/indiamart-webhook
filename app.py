@@ -37,7 +37,7 @@ ENQUIRY_KEYWORDS = {
     "GLASS": [
         "glass", "mirror", "toughened", "tempered", "upvc",
         "window", "baba glass", "sliding door", "sliding window",
-        "upvc door", "upvc window"
+        "upvc door", "upvc window", "led mirror"
     ],
     "KALINGA": [
         "kalinga", "quartz", "countertop"
@@ -76,6 +76,27 @@ def parse_field(value):
             return str(value)
     return str(value).strip()
 
+def extract_lead(data):
+    # Try RESPONSE key first
+    if isinstance(data, dict) and "RESPONSE" in data:
+        response = data["RESPONSE"]
+        if isinstance(response, list) and len(response) > 0:
+            return response[0]
+        elif isinstance(response, dict):
+            return response
+
+    # Try direct list
+    if isinstance(data, list) and len(data) > 0:
+        return data[0]
+
+    # Try direct dict
+    if isinstance(data, dict):
+        # Check if it has lead fields directly
+        if "SENDER_NAME" in data or "SENDER_MOBILE" in data:
+            return data
+
+    return {}
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -84,25 +105,19 @@ def webhook():
 
         data = request.get_json(force=True, silent=True)
         if not data:
-            data = {}
+            print("⚠️ No JSON data received!")
+            return jsonify({"status": "no data"}), 200
 
-        print(f"📥 Parsed: {json.dumps(data, indent=2)}")
+        print(f"📥 Parsed JSON: {json.dumps(data, indent=2)}")
 
-        # Handle both direct and nested RESPONSE format
-        if "RESPONSE" in data:
-            lead = data["RESPONSE"]
-            if isinstance(lead, list):
-                lead = lead[0]
-        elif isinstance(data, list):
-            lead = data[0]
-        else:
-            lead = data
+        lead = extract_lead(data)
+        print(f"📋 Extracted lead: {json.dumps(lead, indent=2)}")
 
         qid          = parse_field(lead.get("UNIQUE_QUERY_ID", ""))
-        product_name = parse_field(lead.get("SUBJECT", "") or lead.get("QUERY_PRODUCT_NAME", ""))
+        product_name = parse_field(lead.get("SUBJECT", "") or lead.get("QUERY_PRODUCT_NAME", "") or lead.get("QUERY_MCAT_NAME", ""))
         message      = parse_field(lead.get("QUERY_MESSAGE", ""))
         sender_name  = parse_field(lead.get("SENDER_NAME", ""))
-        sender_phone = parse_field(lead.get("SENDER_MOBILE", "") or lead.get("SENDER_PHONE", ""))
+        sender_phone = parse_field(lead.get("SENDER_MOBILE", "") or lead.get("SENDER_PHONE", "") or lead.get("RECEIVER_MOBILE", ""))
         sender_email = parse_field(lead.get("SENDER_EMAIL", ""))
         sender_city  = parse_field(lead.get("SENDER_CITY", ""))
         query_time   = parse_field(lead.get("QUERY_TIME", ""))
@@ -145,7 +160,7 @@ def webhook():
         ]
 
         sheet.append_row(row, value_input_option="USER_ENTERED")
-        print(f"✅ Lead saved: {sender_name} | {sender_phone} | {product_name}")
+        print(f"✅ Lead saved successfully: {sender_name} | {sender_phone} | {product_name}")
 
         return jsonify({"status": "success"}), 200
 
