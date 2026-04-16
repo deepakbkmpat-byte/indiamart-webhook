@@ -1,8 +1,3 @@
-"""
-IndiaMART Push API Webhook Server
-Receives leads instantly and saves to Google Sheet!
-"""
-
 from flask import Flask, request, jsonify
 import gspread
 from google.oauth2.service_account import Credentials
@@ -13,18 +8,10 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ============================================================
-# CONFIG
-# ============================================================
-
 GOOGLE_SHEET_ID  = "10Tg9Pu1Cm-4u8-efQrFSvgedIg3Q-iN-ZSdsDZJIiQg"
 GOOGLE_SHEET_TAB = "Calling_Log"
 YOUR_EMAIL       = "roshnibabakitalo@gmail.com"
 CREDENTIALS_FILE = "imartcredential.json"
-
-# ============================================================
-# Google Sheet Connection
-# ============================================================
 
 def get_sheet():
     scopes = [
@@ -35,10 +22,6 @@ def get_sheet():
     client = gspread.authorize(creds)
     sheet  = client.open_by_key(GOOGLE_SHEET_ID).worksheet(GOOGLE_SHEET_TAB)
     return sheet
-
-# ============================================================
-# Smart Enquiry Type Detection
-# ============================================================
 
 ENQUIRY_KEYWORDS = {
     "GRANITE": [
@@ -53,7 +36,8 @@ ENQUIRY_KEYWORDS = {
     ],
     "GLASS": [
         "glass", "mirror", "toughened", "tempered", "upvc",
-        "window", "baba glass", "sliding door"
+        "window", "baba glass", "sliding door", "sliding window",
+        "upvc door", "upvc window"
     ],
     "KALINGA": [
         "kalinga", "quartz", "countertop"
@@ -82,40 +66,46 @@ def extract_quantity(message):
     )
     return match.group(0) if match else ""
 
-# ============================================================
-# Webhook Endpoint — IndiaMART sends leads here!
-# ============================================================
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json(force=True)
-        print(f"📥 Lead received: {json.dumps(data, indent=2)}")
+        raw = request.get_data(as_text=True)
+        print(f"📥 Raw data: {raw}")
 
-        # Get lead details
-        lead         = data if isinstance(data, dict) else data[0]
-        qid          = lead.get("UNIQUE_QUERY_ID", "")
-        product_name = lead.get("SUBJECT", "")
-        message      = lead.get("QUERY_MESSAGE", "")
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            data = {}
 
-        # Connect to Google Sheet
+        print(f"📥 Parsed: {json.dumps(data, indent=2)}")
+
+        lead = data if isinstance(data, dict) else (data[0] if data else {})
+
+        qid          = str(lead.get("UNIQUE_QUERY_ID", "") or lead.get("query_id", "") or "")
+        product_name = str(lead.get("SUBJECT", "") or lead.get("subject", "") or "")
+        message      = str(lead.get("QUERY_MESSAGE", "") or lead.get("message", "") or "")
+        sender_name  = str(lead.get("SENDER_NAME", "") or lead.get("name", "") or "")
+        sender_phone = str(lead.get("SENDER_MOBILE", "") or lead.get("mobile", "") or lead.get("SENDER_PHONE", "") or "")
+        sender_email = str(lead.get("SENDER_EMAIL", "") or lead.get("email", "") or "")
+        sender_city  = str(lead.get("SENDER_CITY", "") or lead.get("city", "") or "")
+        query_time   = str(lead.get("QUERY_TIME", "") or lead.get("time", "") or "")
+
+        print(f"✅ Name: {sender_name} | Phone: {sender_phone} | Product: {product_name}")
+
         sheet = get_sheet()
 
-        # Check duplicate
         existing_ids = set(sheet.col_values(2)[1:])
         if qid and qid in existing_ids:
-            print(f"⚠️ Duplicate lead ignored: {qid}")
+            print(f"⚠️ Duplicate: {qid}")
             return jsonify({"status": "duplicate"}), 200
 
-        # Format row
         row = [
             YOUR_EMAIL,
             qid,
-            lead.get("QUERY_TIME", ""),
+            query_time,
             "INDIAMART",
-            lead.get("SENDER_NAME", ""),
-            lead.get("SENDER_MOBILE", ""),
-            lead.get("SENDER_EMAIL", ""),
+            sender_name,
+            sender_phone,
+            sender_email,
             product_name,
             detect_enquiry_type(product_name),
             extract_quantity(message),
@@ -127,19 +117,14 @@ def webhook():
             "", ""
         ]
 
-        # Add to sheet
         sheet.append_row(row, value_input_option="USER_ENTERED")
-        print(f"✅ Lead added: {lead.get('SENDER_NAME')} | {product_name}")
+        print(f"✅ Lead saved: {sender_name} | {product_name}")
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
         print(f"❌ Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-# ============================================================
-# Health Check
-# ============================================================
 
 @app.route("/", methods=["GET"])
 def home():
@@ -152,10 +137,6 @@ def home():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "healthy"}), 200
-
-# ============================================================
-# Run Server
-# ============================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
