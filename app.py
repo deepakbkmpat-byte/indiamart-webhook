@@ -66,6 +66,16 @@ def extract_quantity(message):
     )
     return match.group(0) if match else ""
 
+def parse_field(value):
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        try:
+            return ''.join([chr(int(x)) for x in value])
+        except:
+            return str(value)
+    return str(value).strip()
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -78,21 +88,38 @@ def webhook():
 
         print(f"📥 Parsed: {json.dumps(data, indent=2)}")
 
-        lead = data if isinstance(data, dict) else (data[0] if data else {})
+        # Handle both direct and nested RESPONSE format
+        if "RESPONSE" in data:
+            lead = data["RESPONSE"]
+            if isinstance(lead, list):
+                lead = lead[0]
+        elif isinstance(data, list):
+            lead = data[0]
+        else:
+            lead = data
 
-        qid          = str(lead.get("UNIQUE_QUERY_ID", "") or lead.get("query_id", "") or "")
-        product_name = str(lead.get("SUBJECT", "") or lead.get("subject", "") or "")
-        message      = str(lead.get("QUERY_MESSAGE", "") or lead.get("message", "") or "")
-        sender_name  = str(lead.get("SENDER_NAME", "") or lead.get("name", "") or "")
-        sender_phone = str(lead.get("SENDER_MOBILE", "") or lead.get("mobile", "") or lead.get("SENDER_PHONE", "") or "")
-        sender_email = str(lead.get("SENDER_EMAIL", "") or lead.get("email", "") or "")
-        sender_city  = str(lead.get("SENDER_CITY", "") or lead.get("city", "") or "")
-        query_time   = str(lead.get("QUERY_TIME", "") or lead.get("time", "") or "")
+        qid          = parse_field(lead.get("UNIQUE_QUERY_ID", ""))
+        product_name = parse_field(lead.get("SUBJECT", "") or lead.get("QUERY_PRODUCT_NAME", ""))
+        message      = parse_field(lead.get("QUERY_MESSAGE", ""))
+        sender_name  = parse_field(lead.get("SENDER_NAME", ""))
+        sender_phone = parse_field(lead.get("SENDER_MOBILE", "") or lead.get("SENDER_PHONE", ""))
+        sender_email = parse_field(lead.get("SENDER_EMAIL", ""))
+        sender_city  = parse_field(lead.get("SENDER_CITY", ""))
+        query_time   = parse_field(lead.get("QUERY_TIME", ""))
 
-        print(f"✅ Name: {sender_name} | Phone: {sender_phone} | Product: {product_name}")
+        # Clean phone number
+        sender_phone = sender_phone.replace("+91-", "").replace("+91", "").strip()
+
+        print(f"✅ Name: {sender_name} | Phone: {sender_phone} | Product: {product_name} | City: {sender_city}")
+
+        # Skip if no useful data
+        if not sender_name and not sender_phone:
+            print("⚠️ Empty lead - skipping!")
+            return jsonify({"status": "skipped"}), 200
 
         sheet = get_sheet()
 
+        # Check duplicate
         existing_ids = set(sheet.col_values(2)[1:])
         if qid and qid in existing_ids:
             print(f"⚠️ Duplicate: {qid}")
@@ -118,7 +145,7 @@ def webhook():
         ]
 
         sheet.append_row(row, value_input_option="USER_ENTERED")
-        print(f"✅ Lead saved: {sender_name} | {product_name}")
+        print(f"✅ Lead saved: {sender_name} | {sender_phone} | {product_name}")
 
         return jsonify({"status": "success"}), 200
 
