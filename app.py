@@ -76,58 +76,75 @@ def parse_field(value):
             return str(value)
     return str(value).strip()
 
+def find_lead_fields(obj):
+    """Recursively search for lead data in ANY structure!"""
+    if isinstance(obj, dict):
+        if any(key in obj for key in [
+            "SENDER_NAME", "SENDER_MOBILE",
+            "UNIQUE_QUERY_ID", "SUBJECT",
+            "QUERY_TIME", "SENDER_CITY"
+        ]):
+            return obj
+        for key, value in obj.items():
+            result = find_lead_fields(value)
+            if result:
+                return result
+    elif isinstance(obj, list):
+        for item in obj:
+            result = find_lead_fields(item)
+            if result:
+                return result
+    return None
+
 def extract_lead(data):
-    # Try RESPONSE key first
-    if isinstance(data, dict) and "RESPONSE" in data:
-        response = data["RESPONSE"]
-        if isinstance(response, list) and len(response) > 0:
-            return response[0]
-        elif isinstance(response, dict):
-            return response
-
-    # Try direct list
-    if isinstance(data, list) and len(data) > 0:
-        return data[0]
-
-    # Try direct dict
-    if isinstance(data, dict):
-        # Check if it has lead fields directly
-        if "SENDER_NAME" in data or "SENDER_MOBILE" in data:
-            return data
-
-    return {}
+    """Smart extraction works for ANY IndiaMART format!"""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except:
+            return {}
+    lead = find_lead_fields(data)
+    return lead if lead else {}
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         raw = request.get_data(as_text=True)
-        print(f"📥 Raw data: {raw}")
+        print(f"📥 Raw: {raw}")
 
         data = request.get_json(force=True, silent=True)
         if not data:
-            print("⚠️ No JSON data received!")
+            print("⚠️ No JSON received!")
             return jsonify({"status": "no data"}), 200
 
-        print(f"📥 Parsed JSON: {json.dumps(data, indent=2)}")
+        print(f"📥 JSON: {json.dumps(data, indent=2)}")
 
         lead = extract_lead(data)
-        print(f"📋 Extracted lead: {json.dumps(lead, indent=2)}")
+        print(f"📋 Lead found: {json.dumps(lead, indent=2)}")
 
         qid          = parse_field(lead.get("UNIQUE_QUERY_ID", ""))
-        product_name = parse_field(lead.get("SUBJECT", "") or lead.get("QUERY_PRODUCT_NAME", "") or lead.get("QUERY_MCAT_NAME", ""))
+        product_name = parse_field(
+            lead.get("SUBJECT", "") or
+            lead.get("QUERY_PRODUCT_NAME", "") or
+            lead.get("QUERY_MCAT_NAME", "")
+        )
         message      = parse_field(lead.get("QUERY_MESSAGE", ""))
         sender_name  = parse_field(lead.get("SENDER_NAME", ""))
-        sender_phone = parse_field(lead.get("SENDER_MOBILE", "") or lead.get("SENDER_PHONE", "") or lead.get("RECEIVER_MOBILE", ""))
+        sender_phone = parse_field(
+            lead.get("SENDER_MOBILE", "") or
+            lead.get("SENDER_PHONE", "") or
+            lead.get("SENDER_MOBILE_ALT", "")
+        )
         sender_email = parse_field(lead.get("SENDER_EMAIL", ""))
         sender_city  = parse_field(lead.get("SENDER_CITY", ""))
         query_time   = parse_field(lead.get("QUERY_TIME", ""))
 
-        # Clean phone number
+        # Clean phone
         sender_phone = sender_phone.replace("+91-", "").replace("+91", "").strip()
 
         print(f"✅ Name: {sender_name} | Phone: {sender_phone} | Product: {product_name} | City: {sender_city}")
 
-        # Skip if no useful data
+        # Skip empty leads
         if not sender_name and not sender_phone:
             print("⚠️ Empty lead - skipping!")
             return jsonify({"status": "skipped"}), 200
@@ -160,7 +177,7 @@ def webhook():
         ]
 
         sheet.append_row(row, value_input_option="USER_ENTERED")
-        print(f"✅ Lead saved successfully: {sender_name} | {sender_phone} | {product_name}")
+        print(f"🎉 Lead saved: {sender_name} | {sender_phone} | {product_name}")
 
         return jsonify({"status": "success"}), 200
 
