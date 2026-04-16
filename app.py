@@ -77,7 +77,6 @@ def parse_field(value):
     return str(value).strip()
 
 def find_lead_fields(obj):
-    """Recursively search for lead data in ANY structure!"""
     if isinstance(obj, dict):
         if any(key in obj for key in [
             "SENDER_NAME", "SENDER_MOBILE",
@@ -97,7 +96,6 @@ def find_lead_fields(obj):
     return None
 
 def extract_lead(data):
-    """Smart extraction works for ANY IndiaMART format!"""
     if isinstance(data, str):
         try:
             data = json.loads(data)
@@ -137,10 +135,18 @@ def webhook():
         )
         sender_email = parse_field(lead.get("SENDER_EMAIL", ""))
         sender_city  = parse_field(lead.get("SENDER_CITY", ""))
+        sender_address = parse_field(lead.get("SENDER_ADDRESS", ""))
         query_time   = parse_field(lead.get("QUERY_TIME", ""))
 
         # Clean phone
         sender_phone = sender_phone.replace("+91-", "").replace("+91", "").strip()
+
+        # Full address - BLANK if no real address
+        full_address = ""
+        if sender_city and sender_city.lower() != "noida":
+            full_address = sender_city
+        if sender_address and sender_city.lower() != "noida":
+            full_address = sender_address
 
         print(f"✅ Name: {sender_name} | Phone: {sender_phone} | Product: {product_name} | City: {sender_city}")
 
@@ -158,22 +164,23 @@ def webhook():
             return jsonify({"status": "duplicate"}), 200
 
         row = [
-            YOUR_EMAIL,
-            qid,
-            query_time,
-            "INDIAMART",
-            sender_name,
-            sender_phone,
-            sender_email,
-            product_name,
-            detect_enquiry_type(product_name),
-            extract_quantity(message),
-            "COLD",
-            "", "",
-            "", "", "", "",
-            "", "", "", "",
-            "", "", "", "",
-            "", ""
+            YOUR_EMAIL,        # EMAIL ID
+            qid,               # Call_ID (Key)
+            query_time,        # ENQ.DATE
+            "INDIAMART",       # LEAD SOURCE
+            sender_name,       # CUSTOMER NAME
+            sender_phone,      # CONTACT NUMBER
+            sender_email,      # CUSTOMER EMAIL
+            full_address,      # ADDRESS ← BLANK if test lead
+            product_name,      # ENQUIRE FOR
+            detect_enquiry_type(product_name),  # ENQUIRE TYPE
+            extract_quantity(message),          # QTY.REQD
+            "COLD",            # LEAD TYPE
+            "", "",            # FOLLOW UP DATE, REMARKS
+            "", "", "", "",    # FOLLOW UP 1,2
+            "", "", "", "",    # FOLLOW UP 3,4
+            "", "", "", "",    # FOLLOW UP 5,6
+            "", ""             # Call Start, Call End
         ]
 
         sheet.append_row(row, value_input_option="USER_ENTERED")
