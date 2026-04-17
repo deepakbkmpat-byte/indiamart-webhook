@@ -67,12 +67,14 @@ def get_sheet():
     return client.open_by_key(GOOGLE_SHEET_ID).worksheet(GOOGLE_SHEET_TAB)
 
 def fetch_leads():
-    url = "https://arms.indiamart.com/arms/api/getContactList"
+    url = "https://seller.indiamart.com/webservice/getContactList"
     params = {
         "glusr_usr_key": API_KEY,
         "start_time": "16-APR-2026 00:00:00",
         "end_time": datetime.now().strftime("%d-%b-%Y %H:%M:%S").upper(),
     }
+    print(f"Calling API: {url}")
+    print(f"Params: {params}")
     response = requests.get(url, params=params, timeout=30)
     print(f"Status: {response.status_code}")
     print(f"Response: {response.text[:500]}")
@@ -80,7 +82,7 @@ def fetch_leads():
 
 def main():
     print("Starting Pull API...")
-    
+
     sheet = get_sheet()
     existing_ids = set(sheet.col_values(2)[1:])
     print(f"Existing leads: {len(existing_ids)}")
@@ -111,6 +113,7 @@ def main():
         message = str(lead.get("QUERY_MESSAGE", "") or "")
         time    = str(lead.get("QUERY_TIME", "") or "")
 
+        # Full address
         full_address = ""
         if city and city.lower() != "noida":
             full_address = city
