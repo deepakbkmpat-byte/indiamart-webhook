@@ -4,7 +4,10 @@ from google.oauth2.service_account import Credentials
 import json
 import re
 import os
+import requests
 from datetime import datetime
+import threading
+import time
 
 app = Flask(__name__)
 
@@ -12,6 +15,7 @@ GOOGLE_SHEET_ID  = "10Tg9Pu1Cm-4u8-efQrFSvgedIg3Q-iN-ZSdsDZJIiQg"
 GOOGLE_SHEET_TAB = "Calling_Log"
 YOUR_EMAIL       = "roshnibabakitalo@gmail.com"
 CREDENTIALS_FILE = "imartcredential.json"
+API_KEY          = "mRy0FLps7XvFSfet7nyP7lqKo1DMnDZi"
 
 def get_sheet():
     scopes = [
@@ -104,6 +108,122 @@ def extract_lead(data):
     lead = find_lead_fields(data)
     return lead if lead else {}
 
+def save_lead_to_sheet(sheet, lead, existing_ids):
+    qid          = parse_field(lead.get("UNIQUE_QUERY_ID", ""))
+    product_name = parse_field(
+        lead.get("SUBJECT", "") or
+        lead.get("QUERY_PRODUCT_NAME", "") or
+        lead.get("QUERY_MCAT_NAME", "")
+    )
+    message      = parse_field(lead.get("QUERY_MESSAGE", ""))
+    sender_name  = parse_field(lead.get("SENDER_NAME", ""))
+    sender_phone = parse_field(
+        lead.get("SENDER_MOBILE", "") or
+        lead.get("SENDER_PHONE", "") or
+        lead.get("SENDER_MOBILE_ALT", "")
+    )
+    sender_email = parse_field(lead.get("SENDER_EMAIL", ""))
+    sender_city  = parse_field(lead.get("SENDER_CITY", ""))
+    sender_address = parse_field(lead.get("SENDER_ADDRESS", ""))
+    query_time   = parse_field(lead.get("QUERY_TIME", ""))
+
+    # Clean phone
+    sender_phone = sender_phone.replace("+91-", "").replace("+91", "").strip()
+
+    # Full address
+    full_address = ""
+    if sender_city and sender_city.lower() != "noida":
+        full_address = sender_city
+    if sender_address and sender_city.lower() != "noida":
+        full_address = sender_address
+
+    # Skip empty leads
+    if not sender_name and not sender_phone:
+        return False
+
+    # Check duplicate
+    if qid and qid in existing_ids:
+        return False
+
+    row = [
+        YOUR_EMAIL,        # EMAIL ID
+        qid,               # Call_ID (Key)
+        query_time,        # ENQ.DATE
+        "INDIAMART",       # LEAD SOURCE
+        sender_name,       # CUSTOMER NAME
+        sender_phone,      # CONTACT NUMBER
+        sender_email,      # CUSTOMER EMAIL
+        full_address,      # ADDRESS
+        product_name,      # ENQUIRE FOR
+        detect_enquiry_type(product_name),  # ENQUIRE TYPE
+        extract_quantity(message),          # QTY.REQD
+        "COLD",            # LEAD TYPE
+        "", "",            # FOLLOW UP DATE, REMARKS
+        "", "", "", "",    # FOLLOW UP 1,2
+        "", "", "", "",    # FOLLOW UP 3,4
+        "", "", "", "",    # FOLLOW UP 5,6
+        "", ""             # Call Start, Call End
+    ]
+
+    sheet.append_row(row, value_input_option="USER_ENTERED")
+    existing_ids.add(qid)
+    print(f"🎉 Lead saved: {sender_name} | {sender_phone} | {product_name}")
+    return True
+
+def pull_inquiry_leads():
+    print("🔄 Starting Pull API...")
+    try:
+        url = "https://seller.indiamart.com/webservice/getContactList"
+        now = datetime.now()
+        params = {
+            "glusr_usr_key": API_KEY,
+            "start_time": "01-APR-2026 00:00:00",
+            "end_time": now.strftime("%d-%b-%Y %H:%M:%S").upper(),
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+        }
+        response = requests.get(
+            url, params=params,
+            headers=headers, timeout=30
+        )
+        print(f"Pull API Status: {response.status_code}")
+        print(f"Pull API Response: {response.text[:200]}")
+
+        if response.status_code != 200:
+            print(f"Pull API Error: {response.status_code}")
+            return
+
+        data = response.json()
+
+        if data.get("CODE") != 200:
+            print(f"Pull API Error: {data}")
+            return
+
+        leads = data.get("RESPONSE", [])
+        print(f"Total leads: {len(leads)}")
+
+        sheet = get_sheet()
+        existing_ids = set(sheet.col_values(2)[1:])
+
+        added = 0
+        for lead in leads:
+            if save_lead_to_sheet(sheet, lead, existing_ids):
+                added += 1
+
+        print(f"✅ Pull Done! Added: {added} new leads")
+
+    except Exception as e:
+        print(f"❌ Pull API Error: {e}")
+
+def run_pull_scheduler():
+    time.sleep(60)
+    while True:
+        pull_inquiry_leads()
+        print("⏰ Next pull in 2 hours...")
+        time.sleep(7200)
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -120,77 +240,30 @@ def webhook():
         lead = extract_lead(data)
         print(f"📋 Lead found: {json.dumps(lead, indent=2)}")
 
-        qid          = parse_field(lead.get("UNIQUE_QUERY_ID", ""))
-        product_name = parse_field(
-            lead.get("SUBJECT", "") or
-            lead.get("QUERY_PRODUCT_NAME", "") or
-            lead.get("QUERY_MCAT_NAME", "")
-        )
-        message      = parse_field(lead.get("QUERY_MESSAGE", ""))
-        sender_name  = parse_field(lead.get("SENDER_NAME", ""))
-        sender_phone = parse_field(
-            lead.get("SENDER_MOBILE", "") or
-            lead.get("SENDER_PHONE", "") or
-            lead.get("SENDER_MOBILE_ALT", "")
-        )
-        sender_email = parse_field(lead.get("SENDER_EMAIL", ""))
-        sender_city  = parse_field(lead.get("SENDER_CITY", ""))
-        sender_address = parse_field(lead.get("SENDER_ADDRESS", ""))
-        query_time   = parse_field(lead.get("QUERY_TIME", ""))
-
-        # Clean phone
-        sender_phone = sender_phone.replace("+91-", "").replace("+91", "").strip()
-
-        # Full address - BLANK if no real address
-        full_address = ""
-        if sender_city and sender_city.lower() != "noida":
-            full_address = sender_city
-        if sender_address and sender_city.lower() != "noida":
-            full_address = sender_address
-
-        print(f"✅ Name: {sender_name} | Phone: {sender_phone} | Product: {product_name} | City: {sender_city}")
-
-        # Skip empty leads
-        if not sender_name and not sender_phone:
-            print("⚠️ Empty lead - skipping!")
-            return jsonify({"status": "skipped"}), 200
-
         sheet = get_sheet()
-
-        # Check duplicate
         existing_ids = set(sheet.col_values(2)[1:])
+
+        qid = parse_field(lead.get("UNIQUE_QUERY_ID", ""))
+
         if qid and qid in existing_ids:
             print(f"⚠️ Duplicate: {qid}")
             return jsonify({"status": "duplicate"}), 200
 
-        row = [
-            YOUR_EMAIL,        # EMAIL ID
-            qid,               # Call_ID (Key)
-            query_time,        # ENQ.DATE
-            "INDIAMART",       # LEAD SOURCE
-            sender_name,       # CUSTOMER NAME
-            sender_phone,      # CONTACT NUMBER
-            sender_email,      # CUSTOMER EMAIL
-            full_address,      # ADDRESS ← BLANK if test lead
-            product_name,      # ENQUIRE FOR
-            detect_enquiry_type(product_name),  # ENQUIRE TYPE
-            extract_quantity(message),          # QTY.REQD
-            "COLD",            # LEAD TYPE
-            "", "",            # FOLLOW UP DATE, REMARKS
-            "", "", "", "",    # FOLLOW UP 1,2
-            "", "", "", "",    # FOLLOW UP 3,4
-            "", "", "", "",    # FOLLOW UP 5,6
-            "", ""             # Call Start, Call End
-        ]
-
-        sheet.append_row(row, value_input_option="USER_ENTERED")
-        print(f"🎉 Lead saved: {sender_name} | {sender_phone} | {product_name}")
-
-        return jsonify({"status": "success"}), 200
+        if save_lead_to_sheet(sheet, lead, existing_ids):
+            return jsonify({"status": "success"}), 200
+        else:
+            print("⚠️ Empty lead - skipping!")
+            return jsonify({"status": "skipped"}), 200
 
     except Exception as e:
         print(f"❌ Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/pull", methods=["GET"])
+def manual_pull():
+    thread = threading.Thread(target=pull_inquiry_leads)
+    thread.start()
+    return jsonify({"status": "pull started"}), 200
 
 @app.route("/", methods=["GET"])
 def home():
@@ -205,5 +278,9 @@ def health():
     return jsonify({"status": "healthy"}), 200
 
 if __name__ == "__main__":
+    scheduler = threading.Thread(target=run_pull_scheduler)
+    scheduler.daemon = True
+    scheduler.start()
+
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
