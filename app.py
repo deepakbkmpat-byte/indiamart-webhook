@@ -173,46 +173,60 @@ def save_lead_to_sheet(sheet, lead, existing_ids):
 def pull_inquiry_leads():
     print("🔄 Starting Pull API...")
     try:
-        url = "https://seller.indiamart.com/webservice/getContactList"
+        # Try different API URLs
+        urls = [
+            "https://seller.indiamart.com/webservice/getcontactlist",
+            "https://seller.indiamart.com/webservice/getContactList",
+            "https://seller.indiamart.com/lmsapi/getcontactlist",
+        ]
+
         now = datetime.now()
         params = {
             "glusr_usr_key": API_KEY,
             "start_time": "01-APR-2026 00:00:00",
             "end_time": now.strftime("%d-%b-%Y %H:%M:%S").upper(),
+            "result_count": 10,
+            "page_number": 1,
         }
         headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
         }
-        response = requests.get(
-            url, params=params,
-            headers=headers, timeout=30
-        )
-        print(f"Pull API Status: {response.status_code}")
-        print(f"Pull API Response: {response.text[:200]}")
 
-        if response.status_code != 200:
-            print(f"Pull API Error: {response.status_code}")
-            return
+        for url in urls:
+            print(f"Trying URL: {url}")
+            response = requests.get(
+                url, params=params,
+                headers=headers, timeout=30
+            )
+            print(f"Status: {response.status_code}")
+            print(f"Response: {response.text[:300]}")
 
-        data = response.json()
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if data.get("CODE") == 200:
+                        leads = data.get("RESPONSE", [])
+                        print(f"Total leads: {len(leads)}")
 
-        if data.get("CODE") != 200:
-            print(f"Pull API Error: {data}")
-            return
+                        sheet = get_sheet()
+                        existing_ids = set(sheet.col_values(2)[1:])
 
-        leads = data.get("RESPONSE", [])
-        print(f"Total leads: {len(leads)}")
+                        added = 0
+                        for lead in leads:
+                            if save_lead_to_sheet(sheet, lead, existing_ids):
+                                added += 1
 
-        sheet = get_sheet()
-        existing_ids = set(sheet.col_values(2)[1:])
+                        print(f"✅ Done! Added: {added} new leads")
+                        return
+                    else:
+                        print(f"API Error: {data}")
+                except Exception as e:
+                    print(f"JSON Error: {e}")
+                    continue
 
-        added = 0
-        for lead in leads:
-            if save_lead_to_sheet(sheet, lead, existing_ids):
-                added += 1
-
-        print(f"✅ Pull Done! Added: {added} new leads")
+        print("❌ All URLs failed!")
 
     except Exception as e:
         print(f"❌ Pull API Error: {e}")
